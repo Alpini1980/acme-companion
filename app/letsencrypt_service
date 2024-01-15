@@ -358,16 +358,26 @@ function update_cert {
     # 0 = success, 2 = RENEW_SKIP
     if [[ $acmesh_return == 0 || $acmesh_return == 2 ]]; then
         for domain in "${hosts_array[@]}"; do
-            if [[ $acme_ca_uri =~ ^https://acme-staging.* ]]; then
-                create_links "_test_$base_domain" "$domain" \
-                    && should_reload_nginx='true' \
-                    && should_restart_container='true'
-            else
-                create_links "$base_domain" "$domain" \
-                    && should_reload_nginx='true' \
-                    && should_restart_container='true'
-            fi
+			
+			#Get the value of the DEFAULT_HOST from the env-variable of the nginx-reverseproxy container:
+			local -r def_host = curl -X GET --unix-socket /tmp/docker.sock http://docker/containers/nginx-reverseproxy/json | jq -r '. |  .Config.Env[] | select(startswith("DEFAULT_HOST=")) | split("=")[1]'
+			echo "DEFAULT_HOST $def_host found"
+			
+			if [[ $def_host != $base_domain || ! -h "/etc/nginx/certs/$domain.crt" ]]
+	        	if [[ $acme_ca_uri =~ ^https://acme-staging.* ]]; then
+	            	create_links "_test_$base_domain" "$domain" \
+	            		&& should_reload_nginx='true' \
+	            	    && should_restart_container='true'
+				else
+	                create_links "$base_domain" "$domain" \
+	                    && should_reload_nginx='true' \
+	                    && should_restart_container='true'
+				fi
+			else
+				echo "$domain was ignored for symlink generation"
+			fi
         done
+
         echo "${COMPANION_VERSION:-}" > "${certificate_dir}/.companion"
         set_ownership_and_permissions "${certificate_dir}/.companion"
         # Make private key root readable only
