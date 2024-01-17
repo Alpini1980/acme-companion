@@ -357,25 +357,32 @@ function update_cert {
 
     # 0 = success, 2 = RENEW_SKIP
     if [[ $acmesh_return == 0 || $acmesh_return == 2 ]]; then
+        
+		# Get the value of the DEFAULT_HOST from the env-variable of the nginx-reverseproxy container:
+        local -r def_host="$(curl -X GET --unix-socket /tmp/docker.sock http://docker/containers/nginx-reverseproxy/json | jq -r '. | .Config.Env[] | select(startswith("DEFAULT_HOST=")) | split("=")[1]')"
+        [[ "$DEBUG" == 1 ]] && echo "DEFAULT_HOST $def_host found"
+		
         for domain in "${hosts_array[@]}"; do
-			
-			#Get the value of the DEFAULT_HOST from the env-variable of the nginx-reverseproxy container:
-			local -r def_host = curl -X GET --unix-socket /tmp/docker.sock http://docker/containers/nginx-reverseproxy/json | jq -r '. |  .Config.Env[] | select(startswith("DEFAULT_HOST=")) | split("=")[1]'
-			echo "DEFAULT_HOST $def_host found"
-			
-			if [[ $def_host != $base_domain || ! -h "/etc/nginx/certs/$domain.crt" ]]
-	        	if [[ $acme_ca_uri =~ ^https://acme-staging.* ]]; then
-	            	create_links "_test_$base_domain" "$domain" \
-	            		&& should_reload_nginx='true' \
-	            	    && should_restart_container='true'
-				else
-	                create_links "$base_domain" "$domain" \
-	                    && should_reload_nginx='true' \
-	                    && should_restart_container='true'
-				fi
-			else
-				echo "$domain was ignored for symlink generation"
-			fi
+			# Create symlink only when:
+			#   the symlink doesn't exist yet or
+			#   the current domain (=subject alternative name of the certificate) is the same as the certificate's base domain name or
+			#   the base domain name of the certificate is not equal to the DEFAULT_HOST of nginx.
+			# This allows having a DEFAULT_HOST with subject alternative names (SANs) which are the same as in other V-HOSTs.
+			# The SANs of the DEFAULT_HOST should not overwrite symlinks of other VHOSTs
+            if [[ ! -h "/etc/nginx/certs/$domain.crt" || $base_domain == $domain || $def_host != $base_domain ]]; then
+                [[ "$DEBUG" == 1 ]] && echo "creating symlinks for $domain (link) --> $base_domain (target)"
+                if [[ $acme_ca_uri =~ ^https://acme-staging.* ]]; then
+                    create_links "_test_$base_domain" "$domain" \
+                        && should_reload_nginx='true' \
+                        && should_restart_container='true'
+                else
+                    create_links "$base_domain" "$domain" \
+                        && should_reload_nginx='true' \
+                        && should_restart_container='true'
+                fi
+            else
+                echo "Not using the certificate of $base_domain for $domain because $base_domain is the DEFAULT_HOST which should not overwrite other vhosts certificates"
+            fi
         done
 
         echo "${COMPANION_VERSION:-}" > "${certificate_dir}/.companion"
